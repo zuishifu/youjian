@@ -3,10 +3,10 @@
 
 2. 核心代码 (Cloudflare Worker)：
 📥 一键复制 
-(包含 AI 摘要、微信推送、邮件转发全套逻辑，直接粘贴即可)
+(包含 AI 摘要、微信推送、邮件转发全套逻辑，直接粘贴即可) 记得修改转发邮箱
 
 3. 关键变量配置：
-Cloudflare 变量名称：WECOM_WEBHOOK_URL
+Cloudflare 变量名称：WECOM_WEBHOOK_URL 企业微信推送Key
 Workers AI 绑定变量名：AI
 
 4. 免费发信服务 (Resend)：
