@@ -1,0 +1,258 @@
+export default {
+  async email(message, env, ctx) {
+    // 1. 配置
+    const FORWARD_TO = env.FORWARD_TO || "your_real_email@gmail.com";
+
+    // 2. 基础信息
+    const subject = message.headers.get("subject") || "无主题";
+    const from = message.from;
+
+    // 3. 获取并清洗邮件正文
+    const rawText = await streamToString(message.raw);
+    const cleanBody = cleanEmailBody(rawText);
+
+    // 4. AI 处理
+    let summary = "";
+    try {
+      const aiResponse = await env.AI.run("@cf/zai-org/glm-4.7-flash", {
+        messages: [
+          {
+            role: "system",
+            content: `你是 Cloudflare Workers 上的邮件安全审计与摘要专家。请用【简体中文】简洁回答。
+
+执行两条指令：
+1. 内容摘要：是谁发的？主要说了什么事？（如：服务器报警、账单待付、验证码登录等）
+2. ⚡️关键数据提取：如果文中包含【验证码】、【OTP】、【金额】、【截止日期】、【订单号】，必须单独清晰列出。没有则不写。
+
+要求：简洁、准确、重点突出。`
+          },
+          {
+            role: "user",
+            content: `邮件内容:\n${cleanBody.substring(0, 6000)}`
+          }
+        ]
+      });
+      summary = aiResponse.response || "AI 未返回有效摘要";
+    } catch (e) {
+      console.error("AI 处理失败:", e);
+      summary = `AI 处理失败: ${e.message}`;
+    }
+
+    // 5. 推送（企业微信 + Telegram）& 转发邮件
+    ctx.waitUntil(Promise.all([
+      sendToWeComBot(env, from, subject, summary),
+      sendToTelegram(env, from, subject, summary)
+    ]));
+    
+    await message.forward(FORWARD_TO);
+  }
+};
+
+// =========================================================
+// 邮件解码与清洗
+// =========================================================
+
+function cleanEmailBody(raw) {
+  try {
+    const { headers, body } = splitHeadersBody(raw);
+    const contentType = getHeader(headers, "content-type") || "";
+    const transferEncoding = getHeader(headers, "content-transfer-encoding");
+
+    // Multipart 处理
+    if (contentType.toLowerCase().includes("multipart")) {
+      const boundaryMatch = contentType.match(/boundary="?([^";\s]+)"?/i);
+      if (boundaryMatch) {
+        const boundary = boundaryMatch[1];
+        const parts = body.split("--" + boundary);
+
+        let bestPart = null;
+        for (const part of parts) {
+          if (!part.trim() || part.trim() === "--") continue;
+
+          const p = splitHeadersBody(part);
+          const pType = (getHeader(p.headers, "content-type") || "").toLowerCase();
+
+          if (pType.includes("text/plain")) {
+            bestPart = p;
+            break; // 优先纯文本
+          }
+          if (pType.includes("text/html") && !bestPart) {
+            bestPart = p;
+          }
+        }
+
+        if (bestPart) {
+          const pEncoding = getHeader(bestPart.headers, "content-transfer-encoding");
+          return decodeContent(bestPart.body, pEncoding);
+        }
+      }
+    }
+
+    // 普通邮件
+    return decodeContent(body, transferEncoding);
+  } catch (e) {
+    console.error("邮件解析错误:", e);
+    return raw.length > 2000 ? raw.substring(0, 2000) : raw;
+  }
+}
+
+function splitHeadersBody(text) {
+  let idx = text.indexOf("\r\n\r\n");
+  if (idx === -1) idx = text.indexOf("\n\n");
+
+  if (idx !== -1) {
+    const separatorLength = text[idx] === "\r" ? 4 : 2;
+    return {
+      headers: text.substring(0, idx),
+      body: text.substring(idx + separatorLength)
+    };
+  }
+  return { headers: "", body: text };
+}
+
+function getHeader(headerText, key) {
+  const regex = new RegExp(`^${key}:\\s*(.*)$`, "im");
+  const match = headerText.match(regex);
+  return match ? match[1].trim() : null;
+}
+
+function decodeContent(content, encoding) {
+  if (!content) return "";
+  const enc = (encoding || "").toLowerCase();
+
+  // Base64 解码
+  if (enc === "base64") {
+    try {
+      const clean = content.replace(/\s/g, "");
+      const binary = atob(clean);
+      const bytes = new Uint8Array(binary.length);
+      for (let i = 0; i < binary.length; i++) {
+        bytes[i] = binary.charCodeAt(i);
+      }
+      return new TextDecoder("utf-8").decode(bytes);
+    } catch (e) {
+      console.error("Base64 解码失败:", e);
+      return content;
+    }
+  }
+
+  // Quoted-Printable 简单解码
+  if (enc === "quoted-printable") {
+    try {
+      return content
+        .replace(/=\r?\n/g, "")
+        .replace(/=([0-9A-F]{2})/gi, (_, hex) =>
+          String.fromCharCode(parseInt(hex, 16))
+        );
+    } catch (e) {
+      return content;
+    }
+  }
+
+  return content;
+}
+
+// =========================================================
+// 工具函数
+// =========================================================
+
+async function streamToString(stream) {
+  const chunks = [];
+  const reader = stream.getReader();
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    chunks.push(value);
+  }
+
+  const decoder = new TextDecoder("utf-8");
+  let result = "";
+  for (const chunk of chunks) {
+    result += decoder.decode(chunk, { stream: true });
+  }
+  result += decoder.decode();
+  return result;
+}
+
+// =========================================================
+// 企业微信推送
+// =========================================================
+
+async function sendToWeComBot(env, from, subject, summary) {
+  const webhookUrl = env.WECOM_WEBHOOK_URL;
+  if (!webhookUrl) return;
+
+  const icon = getIcon(summary, subject);
+
+  const textContent = `${icon} 新邮件到达
+--------------------
+发件人: ${from}
+主　题: ${subject}
+--------------------
+${summary}
+`;
+
+  try {
+    await fetch(webhookUrl, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        msgtype: "text",
+        text: { content: textContent }
+      })
+    });
+  } catch (err) {
+    console.error("企业微信推送失败:", err);
+  }
+}
+
+// =========================================================
+// Telegram 推送
+// =========================================================
+
+async function sendToTelegram(env, from, subject, summary) {
+  const token = env.TELEGRAM_BOT_TOKEN;
+  const chatId = env.TELEGRAM_CHAT_ID;
+  if (!token || !chatId) return;
+
+  const icon = getIcon(summary, subject);
+
+  const text = `${icon} <b>新邮件到达</b>
+--------------------
+<b>发件人:</b> ${from}
+<b>主题:</b> ${subject}
+--------------------
+${summary}`;
+
+  try {
+    await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        chat_id: chatId,
+        text: text,
+        parse_mode: "HTML",
+        disable_web_page_preview: true
+      })
+    });
+  } catch (err) {
+    console.error("Telegram 推送失败:", err);
+  }
+}
+
+// 公共图标匹配
+function getIcon(summary, subject) {
+  const iconMap = [
+    { icon: "🚨", keywords: ["报警", "紧急", "错误", "失败", "Alert", "Error", "Exception"] },
+    { icon: "💰", keywords: ["金额", "账单", "支付", "Payment", "Bill", "发票"] },
+    { icon: "🔐", keywords: ["验证码", "OTP", "Code", "登录", "验证"] },
+    { icon: "📦", keywords: ["快递", "发货", "Delivery", "物流"] }
+  ];
+
+  for (const item of iconMap) {
+    if (item.keywords.some(k => summary.includes(k) || subject.includes(k))) {
+      return item.icon;
+    }
+  }
+  return "📧";
+}
