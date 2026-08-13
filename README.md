@@ -6,13 +6,17 @@
 (包含 AI 摘要、微信推送、邮件转发全套逻辑，直接粘贴即可) 记得修改转发邮箱
 
 3. 关键变量配置：
-Cloudflare 变量名称：WECOM_WEBHOOK_URL 企业微信推送地址Key
+部署时记得配置环境变量
+在 Cloudflare Dashboard → Workers → 你的 Worker → Settings → Variables 里添加：
+变量名               值
+FORWARD_TO          你的真实邮箱
+WECOM_WEBHOOK_URL   企业微信机器人 Webhook 地址
 Workers AI 绑定变量名：AI
 
-4. 免费发信服务 (Resend)：
+5. 免费发信服务 (Resend)：
 👉 注册地址：https://resend.com/login
 
-5. Gmail SMTP 设置参数：
+6. Gmail SMTP 设置参数：
 SMTP 服务器：smtp.resend.com
 端口：587 (TLS)
 用户名：resend
