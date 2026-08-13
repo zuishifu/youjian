@@ -11,13 +11,5 @@
 变量名               值
 FORWARD_TO          你的真实邮箱
 WECOM_WEBHOOK_URL   企业微信机器人 Webhook 地址
-Workers AI 绑定变量名：AI
 
-5. 免费发信服务 (Resend)：
-👉 注册地址：https://resend.com/login
-
-6. Gmail SMTP 设置参数：
-SMTP 服务器：smtp.resend.com
-端口：587 (TLS)
-用户名：resend
-密码：(在 Resend 后台生成的 API Key)
+4.绑定Workers AI 绑定变量名：AI
