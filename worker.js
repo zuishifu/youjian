@@ -14,7 +14,7 @@ export default {
     // 4. AI 处理 
     let summary = "";
     try {
-      const aiResponse = await env.AI.run('@cf/meta/llama-3-8b-instruct', {
+      const aiResponse = await env.AI.run('@cf/meta/llama-3.2-1b-instruct', {
         messages: [
           {
             role: "system",
