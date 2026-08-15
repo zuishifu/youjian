@@ -11,7 +11,7 @@ export default {
     // AI 处理
     let summary = "";
     try {
-      const aiResponse = await env.AI.run("@cf/zai-org/glm-4.7-flash", {
+      const aiResponse = await env.AI.run("@cf/meta/llama-3.1-8b-instruct-fast", {
         messages: [
           {
             role: "system",
